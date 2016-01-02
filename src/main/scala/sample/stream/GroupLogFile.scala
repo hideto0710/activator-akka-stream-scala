@@ -2,6 +2,9 @@ package sample.stream
 
 import java.io.File
 
+import scala.concurrent.Await
+import scala.concurrent.duration.Duration
+
 import akka.actor.ActorSystem
 import akka.stream.{ClosedShape, ActorMaterializer}
 import akka.stream.io.Framing
@@ -37,9 +40,12 @@ object GroupLogFile {
             case _ => l == "OTHER"
           }.
           map(line => ByteString(line + "\n")).
-          toMat(FileIO.toFile(new File(s"target/log-$l.txt")))((_, bytesWritten) => bytesWritten)
+          toMat(FileIO.toFile(new File(s"target/log-$l.txt")))((_, bytesWritten) =>
+            Await.result(bytesWritten, Duration.Inf)
+          )
       ClosedShape
     }
     RunnableGraph.fromGraph(graph).run()
+    system.shutdown()
   }
 }
