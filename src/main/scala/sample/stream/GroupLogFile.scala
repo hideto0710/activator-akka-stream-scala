@@ -2,20 +2,19 @@ package sample.stream
 
 import java.io.File
 
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
-
 import akka.actor.ActorSystem
-import akka.stream.{ClosedShape, ActorMaterializer}
+import akka.stream.{SinkShape, ActorMaterializer}
 import akka.stream.io.Framing
 import akka.stream.scaladsl._
 import akka.util.ByteString
 
+import scala.util.{Success, Failure}
+
 object GroupLogFile {
 
   def main(args: Array[String]): Unit = {
-    // actor system and implicit materializer
     implicit val system = ActorSystem("Sys")
+    import system.dispatcher
     implicit val materializer = ActorMaterializer()
 
     val LoglevelPattern = """.*\[(DEBUG|INFO|WARN|ERROR)\].*""".r
@@ -32,7 +31,6 @@ object GroupLogFile {
     val graph = GraphDSL.create() { implicit builder =>
       import GraphDSL.Implicits._
       val broadcast = builder.add(Broadcast[String](LogLevels.size))
-      source ~> broadcast.in
       for ((l, i) <- LogLevels.view.zipWithIndex)
         broadcast.out(i) ~> Flow[String].
           filter {
@@ -40,12 +38,17 @@ object GroupLogFile {
             case _ => l == "OTHER"
           }.
           map(line => ByteString(line + "\n")).
-          toMat(FileIO.toFile(new File(s"target/log-$l.txt")))((_, bytesWritten) =>
-            Await.result(bytesWritten, Duration.Inf)
-          )
-      ClosedShape
+          toMat(FileIO.toFile(new File(s"target/log-$l.txt")))((_, bytesWritten) => bytesWritten)
+      SinkShape(broadcast.in)
     }
-    RunnableGraph.fromGraph(graph).run()
-    system.shutdown()
+    val materialized = Sink.fromGraph(graph).runWith(source)
+
+    materialized.onComplete {
+      case Success(_) =>
+        system.shutdown()
+      case Failure(e) =>
+        println(s"Failure: ${e.getMessage}")
+        system.shutdown()
+    }
   }
 }
